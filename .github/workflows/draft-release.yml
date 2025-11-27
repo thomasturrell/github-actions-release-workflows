@@ -1,0 +1,163 @@
+name: Draft Release Workflow
+
+# NOTE: This workflow does not function as intended.
+# GitHub does NOT fire a "release" event when a draft release is created.
+# The "created" action is only triggered when a release is published.
+# See discussion: https://github.com/orgs/community/discussions/7118
+# Documentation: https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#release
+#
+# This is a HYPOTHETICAL workflow that demonstrates what would be possible if
+# GitHub supported triggering workflows on draft release creation.
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  draft-release:
+    # This condition would ensure we only run for draft releases
+    if: github.event.release.draft == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Draft release triggered
+        run: echo "Draft release workflow triggered for ${{ github.event.release.tag_name }} by ${{ github.event.release.author.login }}"
+
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout target commitish with full history (needed to commit & tag)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.target_commitish }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Prepend release entry to CHANGELOG.md and commit
+        # This step updates the changelog and commits changes.
+        # In a Maven environment, you might run `mvn release:prepare` here.
+        # In an npm environment, you might run `npm version` or use semantic-release.
+        # For other build systems, integrate their release tooling at this stage.
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
+
+          # Read common values from event
+          REPO_FULL_NAME="${{ github.repository }}"
+          TAG="${{ github.event.release.tag_name }}"
+          RELEASE_NAME="${{ github.event.release.name }}"
+          BODY_TEXT_RAW="${{ github.event.release.body }}"
+
+          echo "Repository: $REPO_FULL_NAME"
+          echo "Tag: $TAG"
+          echo "Release name: $RELEASE_NAME"
+
+          # Ensure git safe directory & committer identity (github-actions[bot])
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Ensure CHANGELOG.md exists
+          if [ ! -f CHANGELOG.md ]; then
+            echo "CHANGELOG.md not found — creating with heading"
+            printf "%s\n\n" "# Changelog" > CHANGELOG.md
+            git add CHANGELOG.md
+            git commit -m "chore(changelog): add CHANGELOG.md"
+          fi
+
+          # Build changelog entry. Use the raw body but ensure it's not 'null'
+          if [ "$BODY_TEXT_RAW" = "null" ] || [ -z "$BODY_TEXT_RAW" ]; then
+            BODY_TEXT="No release notes provided."
+          else
+            BODY_TEXT="$BODY_TEXT_RAW"
+          fi
+
+          ENTRY_TMP="$(mktemp)"
+          printf "## %s - %s - %s\n\n%s\n\n" "$TAG" "$RELEASE_NAME" "$BODY_TEXT" > "$ENTRY_TMP"
+          # Prepend: write entry then existing file
+          cat CHANGELOG.md >> "$ENTRY_TMP"
+          mv "$ENTRY_TMP" CHANGELOG.md
+
+          git add CHANGELOG.md
+          # Always commit; this workflow prepends a new entry for each draft release
+          git commit -m "chore(release): add changelog entry for $TAG"
+
+          echo "Pushing commit..."
+          git push origin HEAD
+
+      - name: Create annotated tag and push
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
+
+          TAG="${{ github.event.release.tag_name }}"
+
+          echo "Creating annotated tag $TAG on new commit..."
+          # Create an annotated tag pointing to the new HEAD
+          # NOTE: For production, consider signing tags with GPG or SSH (git tag -s) for verification
+
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Build artifacts
+        # This is where you would add your release artifacts
+        # Examples:
+        # - Maven: mvn clean package
+        # - npm: npm run build && npm pack
+        # - Go: go build -o myapp
+        # - Gradle: gradle build
+        # - Docker: docker build and push
+        run: |
+          set -euo pipefail
+          
+          echo "Building release artifacts..."
+          # Placeholder for actual build commands
+          mkdir -p dist
+          echo "Sample artifact for ${{ github.event.release.tag_name }}" > dist/sample-artifact.txt
+          echo "Built at $(date -u)" >> dist/sample-artifact.txt
+
+      - name: Upload artifacts to draft release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          REPO_FULL_NAME="${{ github.repository }}"
+          TAG="${{ github.event.release.tag_name }}"
+
+          echo "Uploading artifacts to draft release $TAG..."
+          
+          # Upload all files from dist directory
+          for file in dist/*; do
+            if [ -f "$file" ]; then
+              echo "Uploading $file..."
+              gh release upload "$TAG" "$file" --repo "$REPO_FULL_NAME" --clobber
+            fi
+          done
+
+      - name: Update draft release to point to new tag
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          REPO_FULL_NAME="${{ github.repository }}"
+          TAG="${{ github.event.release.tag_name }}"
+
+          echo "Updating draft release to point to tag $TAG..."
+          
+          # Update the release to point to the new tag
+          # The release remains in draft state for manual review before publishing
+          gh release edit "$TAG" --repo "$REPO_FULL_NAME" --tag "$TAG" --draft
+
+          echo "Draft release updated successfully!"
+          echo "Review the release and publish when ready at:"
+          echo "https://github.com/$REPO_FULL_NAME/releases/tag/$TAG"

@@ -1,0 +1,43 @@
+name: All Releases Workflow
+
+# This workflow is for debugging purposes. It triggers on all release events
+# (published, unpublished, created, edited, deleted, prereleased, released)
+# and prints detailed information about the event and release to help understand
+# what data is available and when different events are triggered.
+
+on:
+  release:
+
+permissions:
+  contents: read
+
+jobs:
+  all-releases:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: All releases triggered
+        run: echo "All releases workflow triggered for ${{ github.event.release.tag_name }} by ${{ github.event.release.author.login }}"
+
+      - name: Print event information
+        run: |
+          echo "=== GitHub Event Information ==="
+          echo "Event name: ${{ github.event_name }}"
+          echo "Action: ${{ github.event.action }}"
+          echo ""
+          echo "=== Release Information ==="
+          echo "Release ID: ${{ github.event.release.id }}"
+          echo "Tag name: ${{ github.event.release.tag_name }}"
+          echo "Release name: ${{ github.event.release.name }}"
+          echo "Draft: ${{ github.event.release.draft }}"
+          echo "Prerelease: ${{ github.event.release.prerelease }}"
+          echo "Author: ${{ github.event.release.author.login }}"
+          echo "Created at: ${{ github.event.release.created_at }}"
+          echo "Published at: ${{ github.event.release.published_at }}"
+          echo "Target commitish: ${{ github.event.release.target_commitish }}"
+          echo "HTML URL: ${{ github.event.release.html_url }}"
+          echo ""
+          echo "=== Full Event Payload ==="
+          cat $GITHUB_EVENT_PATH | jq .

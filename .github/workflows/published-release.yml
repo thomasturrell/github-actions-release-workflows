@@ -1,0 +1,146 @@
+name: Published Release Workflow
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  published-release:
+    # Skip when sender is a bot to avoid workflow recursion (e.g., github-actions[bot] or GitHub Apps)
+    if: github.event.release.draft == false && github.event.sender.type != 'Bot'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Published release triggered
+        run: echo "Published release workflow triggered for ${{ github.event.release.tag_name }} by ${{ github.event.release.author.login }}"
+
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout target commitish with full history (needed to commit & tag)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.target_commitish }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Delete existing release and tag (if present)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
+
+          REPO_FULL_NAME="${{ github.repository }}"
+          TAG="${{ github.event.release.tag_name }}"
+
+          echo "Repository: $REPO_FULL_NAME"
+          echo "Tag: $TAG"
+
+          # Note: Using app token to ensure we have permissions to delete releases and
+          # bypass tag protections. We delete the release and tag separately (not using
+          # --cleanup-tag) for better error handling and logging. This allows us to:
+          # check existence before deletion, handle cases where the tag exists without
+          # a release, and provide detailed feedback.
+
+          echo "Checking for existing release for tag $TAG..."
+          if release_info=$(gh release view "$TAG" --repo "$REPO_FULL_NAME" --json id 2>/dev/null); then
+            release_id=$(echo "$release_info" | jq -r .id)
+            echo "Found existing release id $release_id — deleting release..."
+            gh release delete "$TAG" --repo "$REPO_FULL_NAME" --yes
+            echo "Deleted release $release_id"
+          else
+            echo "No existing release found for tag $TAG"
+          fi
+
+          echo "Checking for existing local tag $TAG..."
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Local tag $TAG exists — deleting locally and on remote..."
+            git tag -d "$TAG"
+            git push origin ":$TAG" || echo "Remote tag not present"
+          else
+            echo "Local tag $TAG not present"
+          fi
+
+      - name: Prepend release entry to CHANGELOG.md, commit, create tag and push
+        # This step updates the changelog, commits changes, and creates a release tag.
+        # In a Maven environment, you might run `mvn release:prepare release:perform` here.
+        # In an npm environment, you might run `npm version` or use semantic-release.
+        # For other build systems, integrate their release tooling at this stage.
+        run: |
+          set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
+
+          # Read common values from event
+          REPO_FULL_NAME="${{ github.repository }}"
+          TAG="${{ github.event.release.tag_name }}"
+          RELEASE_NAME="${{ github.event.release.name }}"
+          BODY_TEXT_RAW="${{ github.event.release.body }}"
+
+          echo "Repository: $REPO_FULL_NAME"
+          echo "Tag: $TAG"
+          echo "Release name: $RELEASE_NAME"
+
+          # Ensure git safe directory & committer identity (github-actions[bot])
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Ensure CHANGELOG.md exists
+          if [ ! -f CHANGELOG.md ]; then
+            echo "CHANGELOG.md not found — creating with heading"
+            printf "%s\n\n" "# Changelog" > CHANGELOG.md
+            git add CHANGELOG.md
+            git commit -m "chore(changelog): add CHANGELOG.md"
+          fi
+
+          # Use the release's published_at timestamp (workflow triggers on published releases)
+          DATE_UTC="$(date -u -d '${{ github.event.release.published_at }}' +%Y-%m-%d)"
+
+          # Build changelog entry. Use the raw body but ensure it's not 'null'
+          if [ "$BODY_TEXT_RAW" = "null" ] || [ -z "$BODY_TEXT_RAW" ]; then
+            BODY_TEXT="No release notes provided."
+          else
+            BODY_TEXT="$BODY_TEXT_RAW"
+          fi
+
+          ENTRY_TMP="$(mktemp)"
+          printf "## %s - %s - %s\n\n%s\n\n" "$TAG" "$RELEASE_NAME" "$DATE_UTC" "$BODY_TEXT" > "$ENTRY_TMP"
+          # Prepend: write entry then existing file
+          cat CHANGELOG.md >> "$ENTRY_TMP"
+          mv "$ENTRY_TMP" CHANGELOG.md
+
+          git add CHANGELOG.md
+          # Always commit; this workflow prepends a new entry for each published release
+          git commit -m "chore(release): add changelog entry for $TAG"
+
+          echo "Pushing commit (and creating tag on the new commit)..."
+          git push origin HEAD
+          # Create an annotated tag pointing to the new HEAD
+          # NOTE: For production, consider signing tags with GPG or SSH (git tag -s) for verification
+
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Recreate release using event body
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+        run: |
+          set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
+
+          REPO_FULL_NAME="${{ github.repository }}"
+          TAG="${{ github.event.release.tag_name }}"
+          RELEASE_NAME="${{ github.event.release.name }}"
+          TARGET_COMMITISH="${{ github.event.release.target_commitish }}"
+          BODY_TEXT="${{ github.event.release.body }}"
+
+          echo "Creating release $RELEASE_NAME for tag $TAG (target: $TAG)"
+
+          # Ensure we point the release at the tag we just created/pushed
+          gh release create "$TAG" --repo "$REPO_FULL_NAME" --target "$TARGET_COMMITISH" --title "$RELEASE_NAME" --notes "$BODY_TEXT"
+
