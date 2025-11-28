@@ -1,3 +1,7 @@
+## v1.0.2 - v1.0.2 - **Full Changelog**: https://github.com/thomasturrell/github-actions-release-workflows/compare/v1.0.1...v1.0.2
+
+
+
 ## v1.0.1 - v1.0.1 - 2025-11-27
 
 **Full Changelog**: https://github.com/thomasturrell/github-actions-release-workflows/commits/v1.0.1
