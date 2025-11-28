@@ -1,14 +1,5 @@
 name: Manual Draft Release
 
-# NOTE: This workflow does not function as intended.
-# GitHub does NOT fire a "release" event when a draft release is created.
-# The "created" action is only triggered when a release is published.
-# See discussion: https://github.com/orgs/community/discussions/7118
-# Documentation: https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#release
-#
-# This is a HYPOTHETICAL workflow that demonstrates what would be possible if
-# GitHub supported triggering workflows on draft release creation.
-
 on:
   workflow_dispatch:
     inputs:
